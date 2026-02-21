@@ -5,7 +5,7 @@
 set -e
 
 ENV_NAME="moss-tts"
-REPO_DIR="$HOME/MOSS-TTS"                # ← можно изменить на желаемый путь
+REPO_DIR="/workspace/MOSS-TTS"                # ← можно изменить на желаемый путь
 MAIN_APP="clis/moss_tts_app.py"          # основной Gradio-интерфейс MOSS-TTS
 
 # ─── 1. Проверяем / создаём окружение ───────────────────────────────────────
