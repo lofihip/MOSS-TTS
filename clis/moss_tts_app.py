@@ -6,6 +6,9 @@ import re
 import time
 import orjson
 
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import gradio as gr
 import numpy as np
 import torch
@@ -443,6 +446,7 @@ def build_demo(args: argparse.Namespace):
                 duration_tokens = gr.Slider(
                     minimum=1,
                     maximum=1,
+                    maximum=8192,
                     step=1,
                     value=1,
                     label="expected_tokens",
@@ -614,6 +618,7 @@ def main():
         server_name=args.host,
         server_port=args.port,
         share=args.share,
+        share=True,
     )
 
 
