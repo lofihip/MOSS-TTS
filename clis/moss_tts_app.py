@@ -445,8 +445,7 @@ def build_demo(args: argparse.Namespace):
                 )
                 duration_tokens = gr.Slider(
                     minimum=1,
-                    maximum=1,
-                    maximum=8192,
+                    maximum=8196,
                     step=1,
                     value=1,
                     label="expected_tokens",
@@ -617,7 +616,6 @@ def main():
     demo.queue(max_size=16, default_concurrency_limit=1).launch(
         server_name=args.host,
         server_port=args.port,
-        share=args.share,
         share=True,
     )
 
