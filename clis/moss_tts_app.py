@@ -599,7 +599,7 @@ def build_demo(args: argparse.Namespace):
                 max_new_tokens,
             ],
             outputs=[output_audio, status],
-            api_name="/lambda",
+            api_name="lambda",
         )
     return demo
 
