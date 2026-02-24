@@ -120,6 +120,7 @@ def resolve_attn_implementation(requested: str, device: torch.device, dtype: tor
     if requested_norm not in {"", "auto"}:
         return requested
 
+    # Prefer FlashAttention 2 when package + device conditions are met.
     if (
         device.type == "cuda"
         and importlib.util.find_spec("flash_attn") is not None
@@ -129,9 +130,11 @@ def resolve_attn_implementation(requested: str, device: torch.device, dtype: tor
         if major >= 8:
             return "flash_attention_2"
 
+    # CUDA fallback: use PyTorch SDPA kernels.
     if device.type == "cuda":
         return "sdpa"
 
+    # CPU fallback.
     return "eager"
 
 
@@ -176,6 +179,8 @@ def update_duration_controls(
         return gr.update(visible=False), "Duration control is disabled.", checkbox_update
 
     language, default_tokens, min_tokens, max_tokens = estimate_duration_tokens(text)
+    # Slider is initialized with value=1 as a placeholder; treat it as "unset"
+    # so first-time estimation uses the computed default instead of clamping to min.
     if current_tokens is None or int(current_tokens) == 1:
         slider_value = default_tokens
     else:
@@ -206,7 +211,6 @@ def build_conversation(
     mode_with_reference: str,
     expected_tokens: int | None,
     processor,
-    prefix_audio: str | None = None,
 ):
     text = (text or "").strip()
     if not text:
@@ -215,23 +219,6 @@ def build_conversation(
     user_kwargs = {"text": text}
     if expected_tokens is not None:
         user_kwargs["tokens"] = int(expected_tokens)
-
-    # API continuation: prefix_audio provided separately from reference_audio
-    if prefix_audio:
-        if reference_audio:
-            clone_kwargs = dict(user_kwargs)
-            clone_kwargs["reference"] = [reference_audio]
-            conversations = [[
-                processor.build_user_message(**clone_kwargs),
-                processor.build_assistant_message(audio_codes_list=[prefix_audio]),
-            ]]
-            return conversations, "continuation", "Continuation + Clone (API)"
-        else:
-            conversations = [[
-                processor.build_user_message(**user_kwargs),
-                processor.build_assistant_message(audio_codes_list=[prefix_audio]),
-            ]]
-            return conversations, "continuation", "Continuation (API)"
 
     if not reference_audio:
         conversations = [[processor.build_user_message(**user_kwargs)]]
@@ -308,7 +295,6 @@ def apply_example_selection(
 def run_inference(
     text: str,
     reference_audio: str | None,
-    prefix_audio: str | None,
     mode_with_reference: str,
     duration_control_enabled: bool,
     duration_tokens: int,
@@ -327,11 +313,7 @@ def run_inference(
         device_str=device,
         attn_implementation=attn_implementation,
     )
-    # For API continuation (prefix_audio provided), always respect duration control
-    if prefix_audio:
-        duration_enabled = bool(duration_control_enabled)
-    else:
-        duration_enabled = bool(duration_control_enabled and supports_duration_control(mode_with_reference))
+    duration_enabled = bool(duration_control_enabled and supports_duration_control(mode_with_reference))
     expected_tokens = int(duration_tokens) if duration_enabled else None
     conversations, mode, mode_name = build_conversation(
         text=text,
@@ -339,7 +321,6 @@ def run_inference(
         mode_with_reference=mode_with_reference,
         expected_tokens=expected_tokens,
         processor=processor,
-        prefix_audio=prefix_audio,
     )
 
     batch = processor(conversations, mode=mode)
@@ -451,11 +432,6 @@ def build_demo(args: argparse.Namespace):
                     label="Reference Audio (Optional)",
                     type="filepath",
                 )
-                prefix_audio = gr.Audio(
-                    label="Prefix Audio (API only)",
-                    type="filepath",
-                    visible=False,
-                )
                 mode_with_reference = gr.Radio(
                     choices=[MODE_CLONE, MODE_CONTINUE, MODE_CONTINUE_CLONE],
                     value=MODE_CLONE,
@@ -469,6 +445,7 @@ def build_demo(args: argparse.Namespace):
                 )
                 duration_tokens = gr.Slider(
                     minimum=1,
+                    maximum=1,
                     maximum=8192,
                     step=1,
                     value=1,
@@ -569,10 +546,9 @@ def build_demo(args: argparse.Namespace):
         )
 
         run_btn.click(
-            fn=lambda text, reference_audio, prefix_audio, mode_with_reference, duration_control_enabled, duration_tokens, temperature, top_p, top_k, repetition_penalty, max_new_tokens: run_inference(
+            fn=lambda text, reference_audio, mode_with_reference, duration_control_enabled, duration_tokens, temperature, top_p, top_k, repetition_penalty, max_new_tokens: run_inference(
                 text=text,
                 reference_audio=reference_audio,
-                prefix_audio=prefix_audio,
                 mode_with_reference=mode_with_reference,
                 duration_control_enabled=duration_control_enabled,
                 duration_tokens=duration_tokens,
@@ -588,7 +564,6 @@ def build_demo(args: argparse.Namespace):
             inputs=[
                 text,
                 reference_audio,
-                prefix_audio,
                 mode_with_reference,
                 duration_control_enabled,
                 duration_tokens,
@@ -599,7 +574,6 @@ def build_demo(args: argparse.Namespace):
                 max_new_tokens,
             ],
             outputs=[output_audio, status],
-            api_name="lambda",
         )
     return demo
 
@@ -623,6 +597,7 @@ def main():
     ) or "none"
     print(f"[INFO] Using attn_implementation={args.attn_implementation}", flush=True)
 
+    # Preload model/processor at startup to avoid first-request cold start latency.
     preload_started_at = time.monotonic()
     print(
         f"[Startup] Preloading backend: model={args.model_path}, device={args.device}, attn={args.attn_implementation}",
@@ -642,6 +617,7 @@ def main():
     demo.queue(max_size=16, default_concurrency_limit=1).launch(
         server_name=args.host,
         server_port=args.port,
+        share=args.share,
         share=True,
     )
 
